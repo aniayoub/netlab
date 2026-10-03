@@ -16,9 +16,13 @@ const (
 	HostA = "host-a"
 	HostB = "host-b"
 
-	VethA = "veth0"
+	Bridge = "br0"
+	Eth0   = "eth0"
+	PortA  = "port-a"
+	PortB  = "port-b"
+	/*VethA = "veth0"
 	VethB = "veth1"
-
+	*/
 	AddrA = "10.0.0.1"
 	AddrB = "10.0.0.2"
 
@@ -32,6 +36,7 @@ type linkInfo struct {
 	IfName    string   `json:"ifname"`
 	Flags     []string `json:"flags"`
 	OperState string   `json:"operstate"`
+	Master    string   `json:"master"`
 }
 
 type addrInfo struct {
@@ -104,6 +109,11 @@ func TestHostUp(t *testing.T) {
 
 	assertNamespaceExists(t, HostA)
 	assertNamespaceExists(t, HostB)
+
+	assertRootLinkExists(t, Bridge)
+	assertRootLinkExists(t, PortA)
+	assertRootLinkExists(t, PortB)
+
 }
 
 func TestHostDown(t *testing.T) {
@@ -121,8 +131,10 @@ func TestHostDown(t *testing.T) {
 	assertNamespaceAbsent(t, HostA)
 	assertNamespaceAbsent(t, HostB)
 
-	assertRootLinkAbsent(t, VethA)
-	assertRootLinkAbsent(t, VethB)
+	assertRootLinkAbsent(t, Bridge)
+
+	assertRootLinkAbsent(t, PortA)
+	assertRootLinkAbsent(t, PortB)
 }
 
 // -----------------------------------------------------------------------------
@@ -153,6 +165,10 @@ func TestExistingHostUpConflict(t *testing.T) {
 	// net lab should not create Host B, since the sequence is create host A first, then host B.
 	// However, this is not the best way to test this behaviour as it relies that the order is guanranteed by the implementation.
 	assertNamespaceAbsent(t, HostB)
+
+	assertRootLinkAbsent(t, Bridge)
+	assertRootLinkAbsent(t, PortA)
+	assertRootLinkAbsent(t, PortB)
 }
 
 func TestNamespaceCreationFailRollsBack(t *testing.T) {
@@ -179,9 +195,13 @@ func TestNamespaceCreationFailRollsBack(t *testing.T) {
 
 	// host-b existed beforehand and must survive.
 	assertNamespaceExists(t, HostB)
+
+	assertRootLinkAbsent(t, Bridge)
+	assertRootLinkAbsent(t, PortA)
+	assertRootLinkAbsent(t, PortB)
 }
 
-func TestVethCreationFailRollsBack(t *testing.T) {
+func TestBridgeCreationFailRollsBack(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -192,18 +212,15 @@ func TestVethCreationFailRollsBack(t *testing.T) {
 		t,
 		"link",
 		"add",
-		VethA,
+		PortB,
 		"type",
-		"veth",
-		"peer",
-		"name",
-		VethB,
+		"dummy",
 	)
 
 	output, err := exec.Command(netlabBinary, "up").CombinedOutput()
 	if err == nil {
 		t.Fatalf(
-			"expected netlab up to fail with existing veth pair\n%s",
+			"expected netlab up to fail with existing bridge\n%s",
 			output,
 		)
 	}
@@ -212,9 +229,10 @@ func TestVethCreationFailRollsBack(t *testing.T) {
 	assertNamespaceAbsent(t, HostA)
 	assertNamespaceAbsent(t, HostB)
 
-	// The conflicting veth pair existed beforehand and must survive.
-	assertRootLinkExists(t, VethA)
-	assertRootLinkExists(t, VethB)
+	assertRootLinkAbsent(t, Bridge)
+	assertRootLinkAbsent(t, PortA)
+
+	assertRootLinkExists(t, PortB)
 }
 
 // -----------------------------------------------------------------------------
@@ -233,7 +251,7 @@ func TestLoopbackUp(t *testing.T) {
 	assertLinkUp(t, HostB, "lo")
 }
 
-func TestVethInsideNamespace(t *testing.T) {
+func TestEthInsideNamespace(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -241,15 +259,14 @@ func TestVethInsideNamespace(t *testing.T) {
 
 	runNetlab(t, "up")
 
-	assertLinkExistsInNamespace(t, HostA, VethA)
-	assertLinkExistsInNamespace(t, HostB, VethB)
+	assertLinkExistsInNamespace(t, HostA, Eth0)
+	assertLinkExistsInNamespace(t, HostB, Eth0)
 
 	// Once moved, neither endpoint should remain visible in the root namespace.
-	assertRootLinkAbsent(t, VethA)
-	assertRootLinkAbsent(t, VethB)
+	assertRootLinkAbsent(t, Eth0)
 }
 
-func TestVethUp(t *testing.T) {
+func TestHostEthUp(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -257,15 +274,53 @@ func TestVethUp(t *testing.T) {
 
 	runNetlab(t, "up")
 
-	assertLinkUp(t, HostA, VethA)
-	assertLinkUp(t, HostB, VethB)
+	assertLinkUp(t, HostA, Eth0)
+	assertLinkUp(t, HostB, Eth0)
+}
+
+func TestBridgeExists(t *testing.T) {
+	requireIntegrationEnvironment(t)
+
+	clearLabState(t)
+	defer clearLabState(t)
+
+	runNetlab(t, "up")
+
+	assertRootLinkExists(t, Bridge)
+	assertRootLinkExists(t, PortA)
+	assertRootLinkExists(t, PortB)
+}
+
+func TestBridgeUp(t *testing.T) {
+	requireIntegrationEnvironment(t)
+
+	clearLabState(t)
+	defer clearLabState(t)
+
+	runNetlab(t, "up")
+
+	assertRootLinkUp(t, Bridge)
+	assertRootLinkUp(t, PortA)
+	assertRootLinkUp(t, PortB)
+}
+
+func TestBridgeMaster(t *testing.T) {
+	requireIntegrationEnvironment(t)
+
+	clearLabState(t)
+	defer clearLabState(t)
+
+	runNetlab(t, "up")
+
+	assertBridgeMaster(t, PortA, Bridge)
+	assertBridgeMaster(t, PortB, Bridge)
 }
 
 // -----------------------------------------------------------------------------
 // Addressing / routing
 // -----------------------------------------------------------------------------
 
-func TestVethAddress(t *testing.T) {
+func TestEthAddress(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -273,8 +328,8 @@ func TestVethAddress(t *testing.T) {
 
 	runNetlab(t, "up")
 
-	assertIPv4Address(t, HostA, VethA, AddrA, PrefixLen)
-	assertIPv4Address(t, HostB, VethB, AddrB, PrefixLen)
+	assertIPv4Address(t, HostA, Eth0, AddrA, PrefixLen)
+	assertIPv4Address(t, HostB, Eth0, AddrB, PrefixLen)
 }
 
 func TestConnectedRoutes(t *testing.T) {
@@ -285,8 +340,8 @@ func TestConnectedRoutes(t *testing.T) {
 
 	runNetlab(t, "up")
 
-	assertConnectedRoute(t, HostA, Subnet, VethA)
-	assertConnectedRoute(t, HostB, Subnet, VethB)
+	assertConnectedRoute(t, HostA, Subnet, Eth0)
+	assertConnectedRoute(t, HostB, Subnet, Eth0)
 }
 
 // -----------------------------------------------------------------------------
@@ -512,7 +567,7 @@ func assertPing(
 		sourceNamespace,
 		"ping",
 		"-c",
-		"1",
+		"3",
 		"-W",
 		"1",
 		destination,
@@ -543,6 +598,86 @@ func assertRootLinkAbsent(t *testing.T, iface string) {
 
 	if rootLinkExists(t, iface) {
 		t.Fatalf("root interface %q unexpectedly exists", iface)
+	}
+}
+func assertRootLinkUp(t *testing.T, iface string) {
+	t.Helper()
+
+	link := runIP(
+		t,
+		"-j",
+		"link",
+		"show",
+		"dev",
+		iface,
+	)
+
+	var links []linkInfo
+
+	if err := json.Unmarshal([]byte(link), &links); err != nil {
+		t.Fatalf(
+			"parse link state for root interface %s: %v\n%s",
+			iface,
+			err,
+			link,
+		)
+	}
+
+	if len(links) != 1 {
+		t.Fatalf(
+			"expected one root interface %s, got %d",
+			iface,
+			len(links),
+		)
+	}
+	if !contains(links[0].Flags, "UP") {
+		t.Fatalf(
+			"interface %s in root is not administratively UP: flags=%v operstate=%s",
+			iface,
+			links[0].Flags,
+			links[0].OperState,
+		)
+	}
+}
+
+func assertBridgeMaster(t *testing.T, portIface string, masterIface string) {
+	t.Helper()
+
+	link := runIP(
+		t,
+		"-j",
+		"link",
+		"show",
+		"dev",
+		portIface,
+	)
+
+	var links []linkInfo
+
+	if err := json.Unmarshal([]byte(link), &links); err != nil {
+		t.Fatalf(
+			"parse link state for bridge interface %s: %v\n%s",
+			portIface,
+			err,
+			link,
+		)
+	}
+
+	if len(links) != 1 {
+		t.Fatalf(
+			"expected one bridge interface %s, got %d",
+			portIface,
+			len(links),
+		)
+	}
+
+	if links[0].Master != masterIface {
+		t.Fatalf(
+			"bridge interface %s is not enslaved to master %s: master=%s",
+			portIface,
+			masterIface,
+			links[0].Master,
+		)
 	}
 }
 
@@ -684,17 +819,22 @@ func clearLabState(t *testing.T) {
 
 	// Remove root-level remnants or deliberate collision fixtures.
 	// Deleting one endpoint of a veth pair also deletes its peer.
-	for _, iface := range []string{VethA, VethB} {
+	for _, iface := range []string{Bridge, PortA, PortB} {
 		if !rootLinkExists(t, iface) {
 			continue
 		}
 
-		runIP(
-			t,
-			"link",
-			"delete",
-			iface,
-		)
+		// We handle deletion without runIP because the veth pair might already be removed
+		// when the namespace was deleted. Attempting to delete it again could result in an error.
+		cmd := exec.Command("ip", "link", "delete", iface)
+		_, err := cmd.CombinedOutput()
+		if err != nil {
+			if !rootLinkExists(t, iface) {
+				t.Logf("Link %s does not exist, nothing to clean up\n", iface)
+				continue
+			}
+			t.Fatalf("Failed to delete link %s: %v\n", iface, err)
+		}
 	}
 }
 
