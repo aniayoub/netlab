@@ -5,7 +5,6 @@ import (
 	"runtime"
 
 	"github.com/aniayoub/netlab/internal/namespace"
-	"github.com/aniayoub/netlab/internal/vethpair"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
@@ -15,9 +14,8 @@ func Setup() error {
 	// This should be enhanced later to lock only during critical namespace operations.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	var namespaceA, namespaceB *namespace.NetNS
-	var vethA, vethB *vethpair.VethPair
-	var bridge *netlink.Bridge
+	var namespaceA, namespaceB, router *namespace.NetNS
+	var vethA, vethB *netlink.Veth
 
 	var err error
 
@@ -31,36 +29,7 @@ func Setup() error {
 
 	defer func() {
 		if !successful_setup {
-			fmt.Println("Cleaning up lab resources...")
-
-			if bridge != nil {
-				if err := netlink.LinkDel(bridge); err != nil {
-					fmt.Printf("Failed to remove bridge: %s\n", err.Error())
-				}
-			}
-
-			if vethB != nil {
-				if err := vethB.Cleanup(); err != nil {
-					fmt.Printf("Failed to cleanup veth pair: %s\n", err.Error())
-				}
-			}
-			if vethA != nil {
-				if err := vethA.Cleanup(); err != nil {
-					fmt.Printf("Failed to cleanup veth pair: %s\n", err.Error())
-				}
-			}
-
-			if namespaceB != nil {
-				if err := namespaceB.Remove(); err != nil {
-					fmt.Printf("Failed to remove namespace host-b: %s\n", err.Error())
-				}
-			}
-
-			if namespaceA != nil {
-				if err := namespaceA.Remove(); err != nil {
-					fmt.Printf("Failed to remove namespace host-a: %s\n", err.Error())
-				}
-			}
+			setupCleanup(namespaceA, namespaceB, router, vethA, vethB)
 		}
 	}()
 
@@ -75,24 +44,11 @@ func Setup() error {
 		}
 	}()
 
-	// create namespaces A
-	// NOTE: This step automatically switches to the new namespace.
-	namespaceA, err = namespace.New("host-a")
+	namespaceA, namespaceB, router, err = setupNamespace()
 
 	if err != nil {
-		return fmt.Errorf("failed to setup namespace host-a: %w", err)
+		return fmt.Errorf("failed to setup namespaces: %w", err)
 	}
-
-	fmt.Println("Namespace host-a setup successfully")
-
-	// create namespaces B
-	// NOTE: This step automatically switches to the new namespace.
-	namespaceB, err = namespace.New("host-b")
-	if err != nil {
-		return fmt.Errorf("failed to setup namespace host-b: %w", err)
-	}
-
-	fmt.Println("Namespace host-b setup successfully")
 
 	// Switch back to the original namespace because each namespace creation does automatically switch to the new namespace.
 	if err := netns.Set(currentNamespace); err != nil {
@@ -101,61 +57,155 @@ func Setup() error {
 
 	fmt.Println("Switched back to the original namespace successfully")
 
-	bridge, err = setupBridge()
+	vethA, vethB, err = setupInterfaces(namespaceA, namespaceB, router)
 	if err != nil {
-		return fmt.Errorf("failed to setup bridge: %w", err)
-	}
-	bridgeIndex := bridge.Attrs().Index
-	fmt.Printf("Bridge setup successfully with index %d\n", bridgeIndex)
-
-	vethA, err = setupVethPair(namespaceA.Fd, bridgeIndex, "a", "10.0.0.1/24")
-	if err != nil {
-		return fmt.Errorf("failed to setup veth pair: %w", err)
+		return fmt.Errorf("failed to setup interfaces: %w", err)
 	}
 
-	fmt.Println("Veth pair for namespace A setup successfully")
+	fmt.Println("Interfaces setup successfully")
 
-	vethB, err = setupVethPair(namespaceB.Fd, bridgeIndex, "b", "10.0.0.2/24")
+	err = setupRouting(namespaceA, namespaceB)
 	if err != nil {
-		return fmt.Errorf("failed to setup veth pair: %w", err)
+		return fmt.Errorf("failed to setup routing: %w", err)
 	}
-	fmt.Println("Veth pair for namespace B setup successfully")
+	fmt.Println("Routing setup successfully")
 
 	successful_setup = true
 
 	return nil
 }
 
-func setupVethPair(NsFd int, brindgeIndex int, keyChar string, address string) (*vethpair.VethPair, error) {
-	// Otherwise we will need to jump back and forth to different namespaces to configure each endpoint.
-	veth, err := vethpair.New(NsFd, brindgeIndex, keyChar)
+func setupNamespace() (namespaceA *namespace.NetNS, namespaceB *namespace.NetNS, router *namespace.NetNS, err error) {
+	// create namespaces A
+	// NOTE: This step automatically switches to the new namespace.
+	namespaceA, err = namespace.New("host-a", false)
+
 	if err != nil {
-		return veth, fmt.Errorf("failed to create veth pair: %w", err)
+		err = fmt.Errorf("failed to setup namespace host-a: %w", err)
+		return
 	}
 
-	fmt.Println("Veth pair created successfully")
+	fmt.Println("Namespace host-a setup successfully")
 
-	if err := veth.Configure(address); err != nil {
-		return veth, fmt.Errorf("failed to setup veth endpoint B: %w", err)
+	// create namespaces B
+	// NOTE: This step automatically switches to the new namespace.
+	namespaceB, err = namespace.New("host-b", false)
+	if err != nil {
+		err = fmt.Errorf("failed to setup namespace host-b: %w", err)
+		return
+	}
+
+	fmt.Println("Namespace host-b setup successfully")
+
+	// create router namespace
+	// NOTE: This step automatically switches to the new namespace.
+	router, err = namespace.New("router", true)
+	if err != nil {
+		err = fmt.Errorf("failed to setup namespace router: %w", err)
+		return
+	}
+
+	fmt.Println("Namespace router setup successfully")
+
+	return namespaceA, namespaceB, router, err
+}
+
+func createVethPair(suffix string) (*netlink.Veth, error) {
+	name := fmt.Sprintf("eth-%s", suffix)
+	peerName := fmt.Sprintf("port-%s", suffix)
+	veth := &netlink.Veth{
+		Name:     name,
+		PeerName: peerName,
+		MTU:      1500,
+	}
+
+	if err := netlink.LinkAdd(veth); err != nil {
+		return nil, fmt.Errorf("failed to create veth pair: %w", err)
 	}
 	return veth, nil
 }
 
-func setupBridge() (*netlink.Bridge, error) {
-	bridge := netlink.Bridge{
-		Name: "br0",
+func setupInterfaces(namespaceA, namespaceB, router *namespace.NetNS) (vethA, vethB *netlink.Veth, err error) {
+
+	vethA, err = createVethPair("a")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to setup veth pair: %w", err)
 	}
 
-	if err := netlink.LinkAdd(&bridge); err != nil {
-		return nil, fmt.Errorf("failed to create bridge: %w", err)
+	vethB, err = createVethPair("b")
+	if err != nil {
+		return vethA, nil, fmt.Errorf("failed to setup veth pair: %w", err)
 	}
 
-	if err := netlink.LinkSetUp(&bridge); err != nil {
-		return nil, fmt.Errorf("failed to bring bridge up: %w", err)
+	err = router.AddConnectivityLink(vethA.PeerName, []int{10, 0, 1, 1})
+	if err != nil {
+		return vethA, vethB, fmt.Errorf("failed to add link to router for vethA: %w", err)
 	}
-	return &bridge, nil
+
+	err = router.AddConnectivityLink(vethB.PeerName, []int{10, 0, 2, 1})
+	if err != nil {
+		return vethA, vethB, fmt.Errorf("failed to add link to router for vethB: %w", err)
+	}
+
+	err = namespaceA.AddConnectivityLink(vethA.Name, []int{10, 0, 1, 2})
+	if err != nil {
+		return vethA, vethB, fmt.Errorf("failed to add link to namespace A: %w", err)
+	}
+
+	err = namespaceB.AddConnectivityLink(vethB.Name, []int{10, 0, 2, 2})
+	if err != nil {
+		return vethA, vethB, fmt.Errorf("failed to add link to namespace B: %w", err)
+	}
+
+	return vethA, vethB, nil
 }
 
+func setupRouting(namespaceA, namespaceB *namespace.NetNS) error {
+	// Add default routes for namespaceA and namespaceB via the router
+	if err := namespaceA.AddDefaultRoute("10.0.1.1"); err != nil {
+		return fmt.Errorf("failed to add route for namespace A: %w", err)
+	}
+
+	if err := namespaceB.AddDefaultRoute("10.0.2.1"); err != nil {
+		return fmt.Errorf("failed to add route for namespace B: %w", err)
+	}
+
+	return nil
+}
+func setupCleanup(namespaceA, namespaceB, router *namespace.NetNS, vethA, vethB *netlink.Veth) {
+	fmt.Println("Cleaning up lab resources...")
+
+	if vethB != nil {
+		// This is the back up cleanup, in case the veth pair was not removed when the namespaces were deleted.
+		if err := netlink.LinkDel(vethB); err != nil {
+			fmt.Printf("Failed to cleanup veth pair: %s\n", err.Error())
+		}
+	}
+
+	if vethA != nil {
+		if err := netlink.LinkDel(vethA); err != nil {
+			fmt.Printf("Failed to cleanup veth pair: %s\n", err.Error())
+		}
+	}
+
+	if router != nil {
+		if err := router.Remove(); err != nil {
+			fmt.Printf("Failed to remove namespace router: %s\n", err.Error())
+		}
+	}
+
+	if namespaceB != nil {
+		if err := namespaceB.Remove(); err != nil {
+			fmt.Printf("Failed to remove namespace host-b: %s\n", err.Error())
+		}
+	}
+
+	if namespaceA != nil {
+		if err := namespaceA.Remove(); err != nil {
+			fmt.Printf("Failed to remove namespace host-a: %s\n", err.Error())
+		}
+	}
+}
 func Remove() error {
 	// Assuming the lab was set up correctly deleting the namespaces should delete the veth pair as well
 	err := netns.DeleteNamed("host-a")
@@ -171,14 +221,11 @@ func Remove() error {
 	}
 	fmt.Println("Namespace host-b deleted successfully")
 
-	bridge, err := netlink.LinkByName("br0")
+	err = netns.DeleteNamed("router")
 	if err != nil {
-		return fmt.Errorf("Error finding bridge br0: %w", err)
+		return fmt.Errorf("Error deleting namespace router: %w", err)
 	}
-	err = netlink.LinkDel(bridge)
-	if err != nil {
-		return fmt.Errorf("Error deleting bridge: %w", err)
-	}
+	fmt.Println("Namespace router deleted successfully")
 
 	fmt.Println("Lab removed successfully")
 

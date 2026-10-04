@@ -13,21 +13,28 @@ import (
 )
 
 const (
-	HostA = "host-a"
-	HostB = "host-b"
+	HostA  = "host-a"
+	Router = "router"
+	HostB  = "host-b"
 
-	Bridge = "br0"
-	Eth0   = "eth0"
-	PortA  = "port-a"
-	PortB  = "port-b"
-	/*VethA = "veth0"
-	VethB = "veth1"
-	*/
-	AddrA = "10.0.0.1"
-	AddrB = "10.0.0.2"
+	Eth0 = "eth0"
+	EthA = "eth-a"
+	EthB = "eth-b"
+
+	PortA = "port-a"
+	PortB = "port-b"
+
+	AddrA = "10.0.1.2"
+	AddrB = "10.0.2.2"
+
+	AddrPortA = "10.0.1.1"
+	AddrPortB = "10.0.2.1"
 
 	PrefixLen = 24
-	Subnet    = "10.0.0.0/24"
+	SubnetA   = "10.0.1.0/24"
+	SubnetB   = "10.0.2.0/24"
+	GatewayA  = "10.0.1.1"
+	GatewayB  = "10.0.2.1"
 )
 
 var netlabBinary string
@@ -93,13 +100,13 @@ func TestMain(m *testing.M) {
 // Integration tests are intentionally destructive.
 //
 // They assume an isolated/disposable Linux environment and may delete
-// namespaces and root links using the fixed Stage 1 resource names.
+// namespaces and root links
 
 // -----------------------------------------------------------------------------
 // Lab lifecycle
 // -----------------------------------------------------------------------------
 
-func TestHostUp(t *testing.T) {
+func TestTopologyUp(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -108,15 +115,24 @@ func TestHostUp(t *testing.T) {
 	runNetlab(t, "up")
 
 	assertNamespaceExists(t, HostA)
+	assertNamespaceExists(t, Router)
 	assertNamespaceExists(t, HostB)
 
-	assertRootLinkExists(t, Bridge)
-	assertRootLinkExists(t, PortA)
-	assertRootLinkExists(t, PortB)
+	// The interfaces are renamed to default eth0 after being assigned to namespaces
+	assertLinkExistsInNamespace(t, HostA, Eth0)
+	assertLinkExistsInNamespace(t, HostB, Eth0)
 
+	assertLinkExistsInNamespace(t, Router, PortA)
+	assertLinkExistsInNamespace(t, Router, PortB)
+
+	// Make sure all interface no longer exist in the root namespace
+	assertRootLinkAbsent(t, EthA)
+	assertRootLinkAbsent(t, EthB)
+	assertRootLinkAbsent(t, PortA)
+	assertRootLinkAbsent(t, PortB)
 }
 
-func TestHostDown(t *testing.T) {
+func TestTopologyDown(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -128,80 +144,55 @@ func TestHostDown(t *testing.T) {
 	runNetlab(t, "up")
 	runNetlab(t, "down")
 
+	// We assume the netlab is successfully brought up, so all interfaces should be absent if their namespaces are deleted.
 	assertNamespaceAbsent(t, HostA)
 	assertNamespaceAbsent(t, HostB)
-
-	assertRootLinkAbsent(t, Bridge)
-
-	assertRootLinkAbsent(t, PortA)
-	assertRootLinkAbsent(t, PortB)
+	assertNamespaceAbsent(t, Router)
 }
 
 // -----------------------------------------------------------------------------
 // Resource conflicts / rollback
 // -----------------------------------------------------------------------------
 
-func TestExistingHostUpConflict(t *testing.T) {
+func TestExistingNamespaceConflict(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
-	clearLabState(t)
-	defer clearLabState(t)
+	namespaces := []string{HostA, HostB, Router}
+	for _, ns := range namespaces {
+		t.Run(ns+" conflict", func(t *testing.T) {
+			clearLabState(t)
+			defer clearLabState(t)
 
-	// Simulate a resource that existed before netlab setup.
-	runIP(t, "netns", "add", HostA)
+			// Simulate a resource that existed before netlab setup.
+			runIP(t, "netns", "add", ns)
 
-	output, err := exec.Command(netlabBinary, "up").CombinedOutput()
-	if err == nil {
-		t.Fatalf(
-			"expected netlab up to fail with existing %s\n%s",
-			HostA,
-			output,
-		)
+			output, err := exec.Command(netlabBinary, "up").CombinedOutput()
+			if err == nil {
+				t.Fatalf(
+					"expected netlab up to fail with existing %s\n%s",
+					ns,
+					output,
+				)
+			}
+
+			// netlab must not delete a resource it did not create.
+			assertNamespaceExists(t, ns)
+
+			for _, otherNS := range namespaces {
+				if otherNS != ns {
+					assertNamespaceAbsent(t, otherNS)
+				}
+			}
+
+			assertRootLinkAbsent(t, EthA)
+			assertRootLinkAbsent(t, EthB)
+			assertRootLinkAbsent(t, PortA)
+			assertRootLinkAbsent(t, PortB)
+		})
 	}
-
-	// netlab must not delete a resource it did not create.
-	assertNamespaceExists(t, HostA)
-
-	// net lab should not create Host B, since the sequence is create host A first, then host B.
-	// However, this is not the best way to test this behaviour as it relies that the order is guanranteed by the implementation.
-	assertNamespaceAbsent(t, HostB)
-
-	assertRootLinkAbsent(t, Bridge)
-	assertRootLinkAbsent(t, PortA)
-	assertRootLinkAbsent(t, PortB)
 }
 
-func TestNamespaceCreationFailRollsBack(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	// host-a should be created successfully first, then creation of host-b
-	// should fail because this fixture already owns it.
-	runIP(t, "netns", "add", HostB)
-
-	output, err := exec.Command(netlabBinary, "up").CombinedOutput()
-	if err == nil {
-		t.Fatalf(
-			"expected netlab up to fail with existing %s\n%s",
-			HostB,
-			output,
-		)
-	}
-
-	// host-a was created by this setup attempt and must be rolled back.
-	assertNamespaceAbsent(t, HostA)
-
-	// host-b existed beforehand and must survive.
-	assertNamespaceExists(t, HostB)
-
-	assertRootLinkAbsent(t, Bridge)
-	assertRootLinkAbsent(t, PortA)
-	assertRootLinkAbsent(t, PortB)
-}
-
-func TestBridgeCreationFailRollsBack(t *testing.T) {
+func TestVethCreationFailRollsBack(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -220,7 +211,7 @@ func TestBridgeCreationFailRollsBack(t *testing.T) {
 	output, err := exec.Command(netlabBinary, "up").CombinedOutput()
 	if err == nil {
 		t.Fatalf(
-			"expected netlab up to fail with existing bridge\n%s",
+			"expected netlab up to fail with existing port-b\n%s",
 			output,
 		)
 	}
@@ -228,8 +219,8 @@ func TestBridgeCreationFailRollsBack(t *testing.T) {
 	// Both namespaces were created by this setup attempt and must be rolled back.
 	assertNamespaceAbsent(t, HostA)
 	assertNamespaceAbsent(t, HostB)
+	assertNamespaceAbsent(t, Router)
 
-	assertRootLinkAbsent(t, Bridge)
 	assertRootLinkAbsent(t, PortA)
 
 	assertRootLinkExists(t, PortB)
@@ -249,9 +240,10 @@ func TestLoopbackUp(t *testing.T) {
 
 	assertLinkUp(t, HostA, "lo")
 	assertLinkUp(t, HostB, "lo")
+	assertLinkUp(t, Router, "lo")
 }
 
-func TestEthInsideNamespace(t *testing.T) {
+func TestHostLinksInsideNamespace(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -262,8 +254,6 @@ func TestEthInsideNamespace(t *testing.T) {
 	assertLinkExistsInNamespace(t, HostA, Eth0)
 	assertLinkExistsInNamespace(t, HostB, Eth0)
 
-	// Once moved, neither endpoint should remain visible in the root namespace.
-	assertRootLinkAbsent(t, Eth0)
 }
 
 func TestHostEthUp(t *testing.T) {
@@ -278,7 +268,7 @@ func TestHostEthUp(t *testing.T) {
 	assertLinkUp(t, HostB, Eth0)
 }
 
-func TestBridgeExists(t *testing.T) {
+func TestRouterLinkExists(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -286,12 +276,11 @@ func TestBridgeExists(t *testing.T) {
 
 	runNetlab(t, "up")
 
-	assertRootLinkExists(t, Bridge)
-	assertRootLinkExists(t, PortA)
-	assertRootLinkExists(t, PortB)
+	assertLinkExistsInNamespace(t, Router, PortA)
+	assertLinkExistsInNamespace(t, Router, PortB)
 }
 
-func TestBridgeUp(t *testing.T) {
+func TestRouterLinksUp(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -299,28 +288,15 @@ func TestBridgeUp(t *testing.T) {
 
 	runNetlab(t, "up")
 
-	assertRootLinkUp(t, Bridge)
-	assertRootLinkUp(t, PortA)
-	assertRootLinkUp(t, PortB)
-}
-
-func TestBridgeMaster(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertBridgeMaster(t, PortA, Bridge)
-	assertBridgeMaster(t, PortB, Bridge)
+	assertLinkUp(t, Router, PortA)
+	assertLinkUp(t, Router, PortB)
 }
 
 // -----------------------------------------------------------------------------
 // Addressing / routing
 // -----------------------------------------------------------------------------
 
-func TestEthAddress(t *testing.T) {
+func TestAddresses(t *testing.T) {
 	requireIntegrationEnvironment(t)
 
 	clearLabState(t)
@@ -330,6 +306,8 @@ func TestEthAddress(t *testing.T) {
 
 	assertIPv4Address(t, HostA, Eth0, AddrA, PrefixLen)
 	assertIPv4Address(t, HostB, Eth0, AddrB, PrefixLen)
+	assertIPv4Address(t, Router, PortA, AddrPortA, PrefixLen)
+	assertIPv4Address(t, Router, PortB, AddrPortB, PrefixLen)
 }
 
 func TestConnectedRoutes(t *testing.T) {
@@ -340,8 +318,34 @@ func TestConnectedRoutes(t *testing.T) {
 
 	runNetlab(t, "up")
 
-	assertConnectedRoute(t, HostA, Subnet, Eth0)
-	assertConnectedRoute(t, HostB, Subnet, Eth0)
+	assertConnectedRoute(t, HostA, SubnetA, "", Eth0)
+	assertConnectedRoute(t, HostB, SubnetB, "", Eth0)
+	assertConnectedRoute(t, Router, SubnetA, "", PortA)
+	assertConnectedRoute(t, Router, SubnetB, "", PortB)
+
+	assertConnectedRoute(t, HostA, "default", GatewayA, Eth0)
+	assertConnectedRoute(t, HostB, "default", GatewayB, Eth0)
+}
+
+func TestIpv4Forwarding(t *testing.T) {
+	requireIntegrationEnvironment(t)
+
+	clearLabState(t)
+	defer clearLabState(t)
+
+	runNetlab(t, "up")
+
+	output := runIP(t,
+		"netns",
+		"exec",
+		Router,
+		"cat",
+		"/proc/sys/net/ipv4/ip_forward",
+	)
+
+	if strings.TrimSpace(output) != "1" {
+		t.Fatalf("IPv4 forwarding is not enabled in namespace %s: got %q", Router, output)
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -498,6 +502,7 @@ func assertConnectedRoute(
 	t *testing.T,
 	namespace string,
 	expectedSubnet string,
+	expectedGateway string,
 	expectedInterface string,
 ) {
 	t.Helper()
@@ -532,7 +537,7 @@ func assertConnectedRoute(
 			continue
 		}
 
-		if route.Gateway != "" {
+		if route.Gateway != expectedGateway {
 			t.Fatalf(
 				"route %s in namespace %s unexpectedly uses gateway %s",
 				expectedSubnet,
@@ -640,47 +645,6 @@ func assertRootLinkUp(t *testing.T, iface string) {
 	}
 }
 
-func assertBridgeMaster(t *testing.T, portIface string, masterIface string) {
-	t.Helper()
-
-	link := runIP(
-		t,
-		"-j",
-		"link",
-		"show",
-		"dev",
-		portIface,
-	)
-
-	var links []linkInfo
-
-	if err := json.Unmarshal([]byte(link), &links); err != nil {
-		t.Fatalf(
-			"parse link state for bridge interface %s: %v\n%s",
-			portIface,
-			err,
-			link,
-		)
-	}
-
-	if len(links) != 1 {
-		t.Fatalf(
-			"expected one bridge interface %s, got %d",
-			portIface,
-			len(links),
-		)
-	}
-
-	if links[0].Master != masterIface {
-		t.Fatalf(
-			"bridge interface %s is not enslaved to master %s: master=%s",
-			portIface,
-			masterIface,
-			links[0].Master,
-		)
-	}
-}
-
 // -----------------------------------------------------------------------------
 // Inspection helpers
 // -----------------------------------------------------------------------------
@@ -777,6 +741,38 @@ func rootLinkExists(t *testing.T, iface string) bool {
 
 	return false
 }
+func linkExists(t *testing.T, namespace string, iface string) bool {
+	t.Helper()
+
+	cmd := exec.Command(
+		"ip",
+		"-n",
+		namespace,
+		"link",
+		"show",
+		"dev",
+		iface,
+	)
+
+	_, err := cmd.CombinedOutput()
+
+	if err == nil {
+		return true
+	}
+
+	if _, ok := err.(*exec.ExitError); ok {
+		return false
+	}
+
+	t.Fatalf(
+		"inspect interface %s/%s: %v",
+		namespace,
+		iface,
+		err,
+	)
+
+	return false
+}
 
 // -----------------------------------------------------------------------------
 // Test environment
@@ -802,9 +798,7 @@ func requireIntegrationEnvironment(t *testing.T) {
 func clearLabState(t *testing.T) {
 	t.Helper()
 
-	// Namespaces first. If they contain the Stage 1 veth endpoints,
-	// deleting the namespaces removes those endpoints with them.
-	for _, namespace := range []string{HostA, HostB} {
+	for _, namespace := range []string{HostA, HostB, Router} {
 		if !namespaceExists(t, namespace) {
 			continue
 		}
@@ -819,7 +813,7 @@ func clearLabState(t *testing.T) {
 
 	// Remove root-level remnants or deliberate collision fixtures.
 	// Deleting one endpoint of a veth pair also deletes its peer.
-	for _, iface := range []string{Bridge, PortA, PortB} {
+	for _, iface := range []string{PortA, PortB} {
 		if !rootLinkExists(t, iface) {
 			continue
 		}
