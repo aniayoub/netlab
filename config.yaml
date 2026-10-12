@@ -1,0 +1,28 @@
+nodes:
+  - name: host-a
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.0.1.2/24
+
+  - name: host-b
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.0.2.2/24
+
+  - name: router
+    type: router
+    interfaces:
+      - name: port-a
+        ip: 10.0.1.1/24
+      - name: port-b
+        ip: 10.0.2.1/24
+
+links:
+  - endpoints:
+      - host-a:eth0
+      - router:port-a
+  - endpoints:
+      - host-b:eth0
+      - router:port-b

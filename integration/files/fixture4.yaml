@@ -1,0 +1,159 @@
+title: "Fixture 4: Three Router Topology with Multiple Access Links"
+
+nodes:
+  - name: host-a
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.4.1.2/24
+      - name: eth1
+        ip: 10.4.2.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.4.1.1
+      - interface: eth1
+        destination: 10.4.5.0/24
+        gateway: 10.4.2.1
+
+  - name: host-b
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.4.3.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.4.3.1
+
+  - name: host-c
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.4.4.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.4.4.1
+
+  - name: host-d
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.4.5.2/24
+      - name: eth1
+        ip: 10.4.6.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.4.5.1
+
+  - name: router-a
+    type: router
+    interfaces:
+      - name: access-a
+        ip: 10.4.1.1/24
+      - name: access-b
+        ip: 10.4.3.1/24
+      - name: to-router-b
+        ip: 10.4.100.1/30
+    routes:
+      - interface: to-router-b
+        destination: 10.4.2.0/24
+        gateway: 10.4.100.2
+      - interface: to-router-b
+        destination: 10.4.4.0/24
+        gateway: 10.4.100.2
+      - interface: to-router-b
+        destination: 10.4.5.0/24
+        gateway: 10.4.100.2
+      - interface: to-router-b
+        destination: 10.4.6.0/24
+        gateway: 10.4.100.2
+      - interface: to-router-b
+        destination: 10.4.101.0/30
+        gateway: 10.4.100.2
+
+  - name: router-b
+    type: router
+    interfaces:
+      - name: access-a
+        ip: 10.4.2.1/24
+      - name: access-c
+        ip: 10.4.4.1/24
+      - name: to-router-a
+        ip: 10.4.100.2/30
+      - name: to-router-c
+        ip: 10.4.101.1/30
+    routes:
+      - interface: to-router-a
+        destination: 10.4.1.0/24
+        gateway: 10.4.100.1
+      - interface: to-router-a
+        destination: 10.4.3.0/24
+        gateway: 10.4.100.1
+      - interface: to-router-c
+        destination: 10.4.5.0/24
+        gateway: 10.4.101.2
+      - interface: to-router-c
+        destination: 10.4.6.0/24
+        gateway: 10.4.101.2
+
+  - name: router-c
+    type: router
+    interfaces:
+      - name: access-d1
+        ip: 10.4.5.1/24
+      - name: access-d2
+        ip: 10.4.6.1/24
+      - name: to-router-b
+        ip: 10.4.101.2/30
+    routes:
+      - interface: to-router-b
+        destination: 10.4.1.0/24
+        gateway: 10.4.101.1
+      - interface: to-router-b
+        destination: 10.4.2.0/24
+        gateway: 10.4.101.1
+      - interface: to-router-b
+        destination: 10.4.3.0/24
+        gateway: 10.4.101.1
+      - interface: to-router-b
+        destination: 10.4.4.0/24
+        gateway: 10.4.101.1
+      - interface: to-router-b
+        destination: 10.4.100.0/30
+        gateway: 10.4.101.1
+
+links:
+  - endpoints:
+      - host-a:eth0
+      - router-a:access-a
+
+  - endpoints:
+      - host-a:eth1
+      - router-b:access-a
+
+  - endpoints:
+      - host-b:eth0
+      - router-a:access-b
+
+  - endpoints:
+      - host-c:eth0
+      - router-b:access-c
+
+  - endpoints:
+      - host-d:eth0
+      - router-c:access-d1
+
+  - endpoints:
+      - host-d:eth1
+      - router-c:access-d2
+
+  - endpoints:
+      - router-a:to-router-b
+      - router-b:to-router-a
+
+  - endpoints:
+      - router-b:to-router-c
+      - router-c:to-router-b

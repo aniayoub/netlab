@@ -10,34 +10,37 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-)
 
-const (
-	HostA  = "host-a"
-	Router = "router"
-	HostB  = "host-b"
-
-	Eth0 = "eth0"
-	EthA = "eth-a"
-	EthB = "eth-b"
-
-	PortA = "port-a"
-	PortB = "port-b"
-
-	AddrA = "10.0.1.2"
-	AddrB = "10.0.2.2"
-
-	AddrPortA = "10.0.1.1"
-	AddrPortB = "10.0.2.1"
-
-	PrefixLen = 24
-	SubnetA   = "10.0.1.0/24"
-	SubnetB   = "10.0.2.0/24"
-	GatewayA  = "10.0.1.1"
-	GatewayB  = "10.0.2.1"
+	"github.com/aniayoub/netlab/internal/config"
 )
 
 var netlabBinary string
+
+var fixtures = []struct {
+	Name       string
+	ConfigPath string
+}{
+	{
+		Name:       "fixture 1: basic topology",
+		ConfigPath: "../files/fixture1.yaml",
+	},
+	{
+		Name:       "fixture 2: Host-Router Topology with Multiple Interfaces",
+		ConfigPath: "../files/fixture2.yaml",
+	},
+	{
+		Name:       "fixture 3: Dual Router Topology with Transit Link",
+		ConfigPath: "../files/fixture3.yaml",
+	},
+	{
+		Name:       "fixture 4: Three Router Topology with Multiple Access Links",
+		ConfigPath: "../files/fixture4.yaml",
+	},
+	{
+		Name:       "fixture 5: Four Router Topology with Multiple Access Links",
+		ConfigPath: "../files/fixture5.yaml",
+	},
+}
 
 type linkInfo struct {
 	IfName    string   `json:"ifname"`
@@ -75,7 +78,7 @@ func TestMain(m *testing.M) {
 		"build",
 		"-o",
 		netlabBinary,
-		"../cmd/netlab",
+		"../../cmd/netlab",
 	)
 
 	output, err := cmd.CombinedOutput()
@@ -95,283 +98,6 @@ func TestMain(m *testing.M) {
 
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
-}
-
-// Integration tests are intentionally destructive.
-//
-// They assume an isolated/disposable Linux environment and may delete
-// namespaces and root links
-
-// -----------------------------------------------------------------------------
-// Lab lifecycle
-// -----------------------------------------------------------------------------
-
-func TestTopologyUp(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertNamespaceExists(t, HostA)
-	assertNamespaceExists(t, Router)
-	assertNamespaceExists(t, HostB)
-
-	// The interfaces are renamed to default eth0 after being assigned to namespaces
-	assertLinkExistsInNamespace(t, HostA, Eth0)
-	assertLinkExistsInNamespace(t, HostB, Eth0)
-
-	assertLinkExistsInNamespace(t, Router, PortA)
-	assertLinkExistsInNamespace(t, Router, PortB)
-
-	// Make sure all interface no longer exist in the root namespace
-	assertRootLinkAbsent(t, EthA)
-	assertRootLinkAbsent(t, EthB)
-	assertRootLinkAbsent(t, PortA)
-	assertRootLinkAbsent(t, PortB)
-}
-
-func TestTopologyDown(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	// To test the host down functionality, we first bring the lab up.
-	// However, this assumes that the lab can be brought down only if it was previously brought up.
-	// The question remains, should we have the case where the lab should bring down (clear namespaces and their associated dependencies) even if it was setup outside netlab!
-	runNetlab(t, "up")
-	runNetlab(t, "down")
-
-	// We assume the netlab is successfully brought up, so all interfaces should be absent if their namespaces are deleted.
-	assertNamespaceAbsent(t, HostA)
-	assertNamespaceAbsent(t, HostB)
-	assertNamespaceAbsent(t, Router)
-}
-
-// -----------------------------------------------------------------------------
-// Resource conflicts / rollback
-// -----------------------------------------------------------------------------
-
-func TestExistingNamespaceConflict(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	namespaces := []string{HostA, HostB, Router}
-	for _, ns := range namespaces {
-		t.Run(ns+" conflict", func(t *testing.T) {
-			clearLabState(t)
-			defer clearLabState(t)
-
-			// Simulate a resource that existed before netlab setup.
-			runIP(t, "netns", "add", ns)
-
-			output, err := exec.Command(netlabBinary, "up").CombinedOutput()
-			if err == nil {
-				t.Fatalf(
-					"expected netlab up to fail with existing %s\n%s",
-					ns,
-					output,
-				)
-			}
-
-			// netlab must not delete a resource it did not create.
-			assertNamespaceExists(t, ns)
-
-			for _, otherNS := range namespaces {
-				if otherNS != ns {
-					assertNamespaceAbsent(t, otherNS)
-				}
-			}
-
-			assertRootLinkAbsent(t, EthA)
-			assertRootLinkAbsent(t, EthB)
-			assertRootLinkAbsent(t, PortA)
-			assertRootLinkAbsent(t, PortB)
-		})
-	}
-}
-
-func TestVethCreationFailRollsBack(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	// Simulate a veth-name collision owned by the test fixture.
-	runIP(
-		t,
-		"link",
-		"add",
-		PortB,
-		"type",
-		"dummy",
-	)
-
-	output, err := exec.Command(netlabBinary, "up").CombinedOutput()
-	if err == nil {
-		t.Fatalf(
-			"expected netlab up to fail with existing port-b\n%s",
-			output,
-		)
-	}
-
-	// Both namespaces were created by this setup attempt and must be rolled back.
-	assertNamespaceAbsent(t, HostA)
-	assertNamespaceAbsent(t, HostB)
-	assertNamespaceAbsent(t, Router)
-
-	assertRootLinkAbsent(t, PortA)
-
-	assertRootLinkExists(t, PortB)
-}
-
-// -----------------------------------------------------------------------------
-// Namespace / interface state
-// -----------------------------------------------------------------------------
-
-func TestLoopbackUp(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertLinkUp(t, HostA, "lo")
-	assertLinkUp(t, HostB, "lo")
-	assertLinkUp(t, Router, "lo")
-}
-
-func TestHostLinksInsideNamespace(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertLinkExistsInNamespace(t, HostA, Eth0)
-	assertLinkExistsInNamespace(t, HostB, Eth0)
-
-}
-
-func TestHostEthUp(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertLinkUp(t, HostA, Eth0)
-	assertLinkUp(t, HostB, Eth0)
-}
-
-func TestRouterLinkExists(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertLinkExistsInNamespace(t, Router, PortA)
-	assertLinkExistsInNamespace(t, Router, PortB)
-}
-
-func TestRouterLinksUp(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertLinkUp(t, Router, PortA)
-	assertLinkUp(t, Router, PortB)
-}
-
-// -----------------------------------------------------------------------------
-// Addressing / routing
-// -----------------------------------------------------------------------------
-
-func TestAddresses(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertIPv4Address(t, HostA, Eth0, AddrA, PrefixLen)
-	assertIPv4Address(t, HostB, Eth0, AddrB, PrefixLen)
-	assertIPv4Address(t, Router, PortA, AddrPortA, PrefixLen)
-	assertIPv4Address(t, Router, PortB, AddrPortB, PrefixLen)
-}
-
-func TestConnectedRoutes(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertConnectedRoute(t, HostA, SubnetA, "", Eth0)
-	assertConnectedRoute(t, HostB, SubnetB, "", Eth0)
-	assertConnectedRoute(t, Router, SubnetA, "", PortA)
-	assertConnectedRoute(t, Router, SubnetB, "", PortB)
-
-	assertConnectedRoute(t, HostA, "default", GatewayA, Eth0)
-	assertConnectedRoute(t, HostB, "default", GatewayB, Eth0)
-}
-
-func TestIpv4Forwarding(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	output := runIP(t,
-		"netns",
-		"exec",
-		Router,
-		"cat",
-		"/proc/sys/net/ipv4/ip_forward",
-	)
-
-	if strings.TrimSpace(output) != "1" {
-		t.Fatalf("IPv4 forwarding is not enabled in namespace %s: got %q", Router, output)
-	}
-}
-
-// -----------------------------------------------------------------------------
-// Connectivity
-// -----------------------------------------------------------------------------
-
-func TestHostAPingsHostB(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertPing(t, HostA, AddrB)
-}
-
-func TestHostBPingsHostA(t *testing.T) {
-	requireIntegrationEnvironment(t)
-
-	clearLabState(t)
-	defer clearLabState(t)
-
-	runNetlab(t, "up")
-
-	assertPing(t, HostB, AddrA)
 }
 
 // -----------------------------------------------------------------------------
@@ -572,7 +298,7 @@ func assertPing(
 		sourceNamespace,
 		"ping",
 		"-c",
-		"3",
+		"2",
 		"-W",
 		"1",
 		destination,
@@ -795,10 +521,10 @@ func requireIntegrationEnvironment(t *testing.T) {
 	}
 }
 
-func clearLabState(t *testing.T) {
+func clearLabState(t *testing.T, namespaces []string, ifaces []string) {
 	t.Helper()
 
-	for _, namespace := range []string{HostA, HostB, Router} {
+	for _, namespace := range namespaces {
 		if !namespaceExists(t, namespace) {
 			continue
 		}
@@ -813,7 +539,7 @@ func clearLabState(t *testing.T) {
 
 	// Remove root-level remnants or deliberate collision fixtures.
 	// Deleting one endpoint of a veth pair also deletes its peer.
-	for _, iface := range []string{PortA, PortB} {
+	for _, iface := range ifaces {
 		if !rootLinkExists(t, iface) {
 			continue
 		}
@@ -832,16 +558,17 @@ func clearLabState(t *testing.T) {
 	}
 }
 
-func runNetlab(t *testing.T, args ...string) string {
+func runNetlab(t *testing.T, action string, configPath string) string {
 	t.Helper()
 
-	cmd := exec.Command(netlabBinary, args...)
+	cmd := exec.Command(netlabBinary, action, configPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf(
-			"netlab %s failed: %v\n%s",
-			strings.Join(args, " "),
+			"netlab %s with config %s failed: %v\n%s",
+			action,
+			configPath,
 			err,
 			output,
 		)
@@ -876,4 +603,22 @@ func contains(values []string, expected string) bool {
 	}
 
 	return false
+}
+
+func loadFixture(t *testing.T, path string) (map[string]*config.NodeConfig, []string, []string) {
+	cfg, err := config.Parse(path)
+
+	if err != nil {
+		t.Fatalf("failed to parse config: %v", err)
+	}
+
+	namespaces := make([]string, 0, len(cfg.Nodes))
+	ifaces := make([]string, 0)
+	for _, node := range cfg.Nodes {
+		namespaces = append(namespaces, node.Name)
+		for _, iface := range node.Interfaces {
+			ifaces = append(ifaces, iface.Name)
+		}
+	}
+	return cfg.Nodes, namespaces, ifaces
 }

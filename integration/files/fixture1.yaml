@@ -1,0 +1,85 @@
+title: "Fixture 1: Basic Host-Router Topology"
+nodes:
+  - name: host-a
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.1.1.2/24
+    routes:
+        - interface: eth0
+          destination: 0.0.0.0/0
+          gateway: 10.1.1.1
+
+  - name: host-b
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.1.2.2/24
+    routes:
+        - interface: eth0
+          destination: 0.0.0.0/0
+          gateway: 10.1.2.1
+
+  - name: host-c
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.1.3.2/24
+    routes:
+        - interface: eth0
+          destination: 0.0.0.0/0
+          gateway: 10.1.3.1
+
+  - name: host-d
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.1.4.2/24
+    routes:
+        - interface: eth0
+          destination: 0.0.0.0/0
+          gateway: 10.1.4.1
+
+  - name: host-e
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.1.5.2/24
+    routes:
+        - interface: eth0
+          destination: 0.0.0.0/0
+          gateway: 10.1.5.1
+
+  - name: router
+    type: router
+    interfaces:
+      - name: port-a
+        ip: 10.1.1.1/24
+      - name: port-b
+        ip: 10.1.2.1/24
+      - name: port-c
+        ip: 10.1.3.1/24
+      - name: port-d
+        ip: 10.1.4.1/24
+      - name: port-e
+        ip: 10.1.5.1/24    
+links:
+  - endpoints:
+      - host-a:eth0
+      - router:port-a
+
+  - endpoints:
+      - host-b:eth0
+      - router:port-b
+
+  - endpoints:
+      - host-c:eth0
+      - router:port-c
+
+  - endpoints:
+      - host-d:eth0
+      - router:port-d
+
+  - endpoints:
+      - host-e:eth0
+      - router:port-e

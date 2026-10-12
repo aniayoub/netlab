@@ -15,7 +15,6 @@ import (
 type NetNS struct {
 	Name   string
 	Fd     int
-	router bool
 	handle *netns.NsHandle
 }
 
@@ -25,7 +24,7 @@ func New(name string, router bool) (*NetNS, error) {
 		return nil, fmt.Errorf("failed to create new named namespace: %w", err)
 	}
 
-	ns := &NetNS{Name: name, Fd: int(newHandle), router: router, handle: &newHandle}
+	ns := &NetNS{Name: name, Fd: int(newHandle), handle: &newHandle}
 
 	if err := initLoopback(); err != nil {
 		// Make sure to return the ns for cleanup purposes
@@ -38,46 +37,44 @@ func New(name string, router bool) (*NetNS, error) {
 		}
 	}
 
+	fmt.Printf("Namespace %s created successfully\n", ns.Name)
+
 	return ns, nil
 }
 
-func (ns *NetNS) AddConnectivityLink(linkName string, address []int) error {
-	if len(address) != 4 {
-		return fmt.Errorf("invalid address length: expected 4, got %d", len(address))
-	}
-
-	if !ns.router && address[3] == 1 {
-		return fmt.Errorf("address ending with 1 is reserved to default")
-	}
-
-	if address[3] == 0 {
-		return fmt.Errorf("address ending with 0 is reserved to network")
-	}
-
-	// First move the link to the current namespace
-	// We assume the link is already created and exists in the current namespace.
-	link, err := netlink.LinkByName(linkName)
+func (ns *NetNS) AddConnectivityLink(linkOriginalName string, linkDesignatedName string, addrIpNet *net.IPNet) error {
+	// Get the link from root namespace
+	// We assume by default the current scope is the root namespace.
+	link, err := netlink.LinkByName(linkOriginalName)
 	if err != nil {
 		return fmt.Errorf("failed to get link by name: %w", err)
 	}
+
+	// Move the link to the target namespace using its file descriptor.
 	if err := netlink.LinkSetNsFd(link, ns.Fd); err != nil {
 
 		if errors.Is(err, syscall.EEXIST) {
-			fmt.Printf("Link %s already exists in the namespace\n", linkName)
+			fmt.Printf("Link %s already exists in the namespace\n", linkOriginalName)
 		}
-		return fmt.Errorf("failed to assign endpoint %s to namespace: %w", linkName, err)
+		return fmt.Errorf("failed to assign endpoint %s to namespace: %w", linkOriginalName, err)
 	}
 
 	return helper.ExecuteInsideNamespace(ns.Fd, func() error {
 		// Get the link again inside the new namespace
-		link, err = netlink.LinkByName(linkName)
+		link, err = netlink.LinkByName(linkOriginalName)
 		if err != nil {
 			return fmt.Errorf("failed to get link by name: %w", err)
 		}
 
+		// Rename the link if the original name differs from the designated name.
+		if linkOriginalName != linkDesignatedName {
+			if err := netlink.LinkSetName(link, linkDesignatedName); err != nil {
+				return fmt.Errorf("failed to rename link from %s to %s: %w", linkOriginalName, linkDesignatedName, err)
+			}
+		}
+
 		// Set the link address
-		addrStr := fmt.Sprintf("%d.%d.%d.%d/24", address[0], address[1], address[2], address[3])
-		if err := configureAddress(&link, addrStr); err != nil {
+		if err := netlink.AddrAdd(link, &netlink.Addr{IPNet: addrIpNet}); err != nil {
 			return fmt.Errorf("failed to set link address: %w", err)
 		}
 
@@ -86,52 +83,70 @@ func (ns *NetNS) AddConnectivityLink(linkName string, address []int) error {
 			return fmt.Errorf("failed to bring link up: %w", err)
 		}
 
-		if !ns.router {
-			if err := netlink.LinkSetName(link, "eth0"); err != nil {
-				return fmt.Errorf("failed to rename link to default eth0: %w", err)
-			}
-		}
-
-		fmt.Printf("\t- Link %s added to %s with address %s\n", linkName, ns.Name, addrStr)
+		fmt.Printf("\t- Link %s added to %s with address %s\n", linkDesignatedName, ns.Name, addrIpNet.String())
 
 		return nil
 	})
-
 }
 
-func (ns *NetNS) AddDefaultRoute(gatewayAddr string) error {
+func (ns *NetNS) AddDefaultRoute(ifaceName string, gatewayAddr string, metric int) error {
 
 	return helper.ExecuteInsideNamespace(ns.Fd, func() error {
 
-		link, err := netlink.LinkByName("eth0")
+		link, err := netlink.LinkByName(ifaceName)
 		if err != nil {
-			return fmt.Errorf("link %s not found in namespace: %w", "eth0", err)
+			return fmt.Errorf("link %s not found in namespace: %w", ifaceName, err)
 		}
 
 		route := &netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       nil,
 			Gw:        net.ParseIP(gatewayAddr), // Notice we don't use the gateway variable defined earlier since it becomes nil inside the function scope
+			Priority:  metric,
 		}
 
 		if err := netlink.RouteAdd(route); err != nil && !errors.Is(err, syscall.EEXIST) {
-			return fmt.Errorf("failed to add default route: %w", err)
+			return fmt.Errorf("failed to add default route to gateway %s: %w", gatewayAddr, err)
 		}
 
-		fmt.Printf("\t- Route added to %s via gateway %s\n", ns.Name, gatewayAddr)
+		fmt.Printf("\t- Route added to %s via gateway %s with metric %d\n", ns.Name, gatewayAddr, metric)
 		return nil
 	})
 
 }
+func (ns *NetNS) AddRoute(
+	ifaceName string,
+	destinationCIDR string,
+	gatewayAddr string,
+	metric int,
+) error {
+	return helper.ExecuteInsideNamespace(ns.Fd, func() error {
+		link, err := netlink.LinkByName(ifaceName)
+		if err != nil {
+			return fmt.Errorf("link %s not found in namespace: %w", ifaceName, err)
+		}
 
-func configureAddress(link *netlink.Link, address string) error {
-	ipNet, err := netlink.ParseIPNet(address)
-	if err != nil {
-		return fmt.Errorf("failed to parse IP network: %w", err)
-	}
+		_, dst, err := net.ParseCIDR(destinationCIDR)
+		if err != nil {
+			return fmt.Errorf("invalid destination CIDR %s: %w", destinationCIDR, err)
+		}
 
-	return netlink.AddrAdd(*link, &netlink.Addr{IPNet: ipNet})
+		route := &netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Dst:       dst,
+			Gw:        net.ParseIP(gatewayAddr),
+			Priority:  metric,
+		}
+
+		if err := netlink.RouteAdd(route); err != nil && !errors.Is(err, syscall.EEXIST) {
+			return fmt.Errorf("failed to add route to %s via %s: %w",
+				destinationCIDR, gatewayAddr, err)
+		}
+
+		return nil
+	})
 }
+
 func (ns *NetNS) Remove() error {
 	fmt.Print("Removing namespace: ", ns.Name, "\n")
 	// Close the handle before deleting the namespace

@@ -1,0 +1,76 @@
+title: "Fixture 2: Host-Router Topology with Multiple Interfaces"
+nodes:
+  - name: host-a
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.2.1.2/24
+      - name: eth1
+        ip: 10.2.2.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.2.1.1
+      - interface: eth1
+        destination: 0.0.0.0/0
+        gateway: 10.2.2.1
+
+  - name: host-b
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.2.3.2/24
+      - name: eth1
+        ip: 10.2.4.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.2.3.1
+      - interface: eth1
+        destination: 0.0.0.0/0
+        gateway: 10.2.4.1
+
+  - name: host-c
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.2.5.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.2.5.1
+
+  - name: router
+    type: router
+    interfaces:
+      - name: port-a1
+        ip: 10.2.1.1/24
+      - name: port-a2
+        ip: 10.2.2.1/24
+      - name: port-b1
+        ip: 10.2.3.1/24
+      - name: port-b2
+        ip: 10.2.4.1/24
+      - name: port-c
+        ip: 10.2.5.1/24
+
+links:
+  - endpoints:
+      - host-a:eth0
+      - router:port-a1
+
+  - endpoints:
+      - host-a:eth1
+      - router:port-a2
+
+  - endpoints:
+      - host-b:eth0
+      - router:port-b1
+
+  - endpoints:
+      - host-b:eth1
+      - router:port-b2
+
+  - endpoints:
+      - host-c:eth0
+      - router:port-c

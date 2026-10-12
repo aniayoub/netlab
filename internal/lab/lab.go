@@ -2,20 +2,22 @@ package lab
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 
+	"github.com/aniayoub/netlab/internal/config"
 	"github.com/aniayoub/netlab/internal/namespace"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
 
-func Setup() error {
+func Setup(config *config.Config) error {
 	// Lock the OS Thread throughout the entire setup process to ensure namespace operations are performed on the correct thread.
 	// This should be enhanced later to lock only during critical namespace operations.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	var namespaceA, namespaceB, router *namespace.NetNS
-	var vethA, vethB *netlink.Veth
+	var nodes map[string]*namespace.NetNS
+	var veths []*netlink.Veth
 
 	var err error
 
@@ -29,7 +31,7 @@ func Setup() error {
 
 	defer func() {
 		if !successful_setup {
-			setupCleanup(namespaceA, namespaceB, router, vethA, vethB)
+			setupCleanup(nodes, veths)
 		}
 	}()
 
@@ -44,8 +46,7 @@ func Setup() error {
 		}
 	}()
 
-	namespaceA, namespaceB, router, err = setupNamespace()
-
+	nodes, err = setupNodes(config)
 	if err != nil {
 		return fmt.Errorf("failed to setup namespaces: %w", err)
 	}
@@ -57,57 +58,76 @@ func Setup() error {
 
 	fmt.Println("Switched back to the original namespace successfully")
 
-	vethA, vethB, err = setupInterfaces(namespaceA, namespaceB, router)
+	veths, err = setupInterfaces(config, nodes)
 	if err != nil {
 		return fmt.Errorf("failed to setup interfaces: %w", err)
 	}
 
 	fmt.Println("Interfaces setup successfully")
 
-	err = setupRouting(namespaceA, namespaceB)
-	if err != nil {
+	if err := setupRouting(config, nodes); err != nil {
 		return fmt.Errorf("failed to setup routing: %w", err)
 	}
-	fmt.Println("Routing setup successfully")
 
+	fmt.Println("Routing setup successfully")
 	successful_setup = true
 
 	return nil
 }
 
-func setupNamespace() (namespaceA *namespace.NetNS, namespaceB *namespace.NetNS, router *namespace.NetNS, err error) {
-	// create namespaces A
-	// NOTE: This step automatically switches to the new namespace.
-	namespaceA, err = namespace.New("host-a", false)
+func setupNodes(cfg *config.Config) (map[string]*namespace.NetNS, error) {
+	createdNodes := make(map[string]*namespace.NetNS)
+	for _, node := range cfg.Nodes {
+		createdNode, err := namespace.New(node.Name, node.Type == config.Router)
 
-	if err != nil {
-		err = fmt.Errorf("failed to setup namespace host-a: %w", err)
-		return
+		if createdNode != nil {
+			createdNodes[node.Name] = createdNode
+		}
+		if err != nil {
+			return createdNodes, fmt.Errorf("failed to create namespace for node %s: %w", node.Name, err)
+		}
 	}
 
-	fmt.Println("Namespace host-a setup successfully")
+	fmt.Println("Nodes setup successfully")
 
-	// create namespaces B
-	// NOTE: This step automatically switches to the new namespace.
-	namespaceB, err = namespace.New("host-b", false)
-	if err != nil {
-		err = fmt.Errorf("failed to setup namespace host-b: %w", err)
-		return
+	return createdNodes, nil
+}
+
+func setupInterfaces(cfg *config.Config, namespaces map[string]*namespace.NetNS) ([]*netlink.Veth, error) {
+	veths := []*netlink.Veth{}
+
+	// We assume in the scope of this project that we won't have more than 26 nodes
+	alphabet := "abcdefghijklmnopqrstuvwxyz"
+	for i, link := range cfg.Links {
+		veth, err := createVethPair(alphabet[i : i+1])
+		if err != nil {
+			return veths, fmt.Errorf("failed to create veth pair: %w", err)
+		}
+
+		veths = append(veths, veth)
+
+		srcNs := namespaces[link.SrcNode]
+		dstNs := namespaces[link.DstNode]
+
+		srcNode := cfg.Nodes[link.SrcNode]
+		dstNode := cfg.Nodes[link.DstNode]
+
+		srcIface := srcNode.Interfaces[link.SrcInterface]
+		dstIface := dstNode.Interfaces[link.DstInterface]
+
+		// Add connectivity links for the source and destination interfaces
+		if err := srcNs.AddConnectivityLink(veth.Name, link.SrcInterface, srcIface.IpNet); err != nil {
+			return veths, fmt.Errorf("failed to add connectivity link for node %s interface %s: %w", link.SrcNode, link.SrcInterface, err)
+		}
+
+		if err := dstNs.AddConnectivityLink(veth.PeerName, link.DstInterface, dstIface.IpNet); err != nil {
+			return veths, fmt.Errorf("failed to add connectivity link for node %s interface %s: %w", link.DstNode, link.DstInterface, err)
+		}
+
 	}
 
-	fmt.Println("Namespace host-b setup successfully")
-
-	// create router namespace
-	// NOTE: This step automatically switches to the new namespace.
-	router, err = namespace.New("router", true)
-	if err != nil {
-		err = fmt.Errorf("failed to setup namespace router: %w", err)
-		return
-	}
-
-	fmt.Println("Namespace router setup successfully")
-
-	return namespaceA, namespaceB, router, err
+	fmt.Println("Interfaces setup successfully")
+	return veths, nil
 }
 
 func createVethPair(suffix string) (*netlink.Veth, error) {
@@ -125,109 +145,91 @@ func createVethPair(suffix string) (*netlink.Veth, error) {
 	return veth, nil
 }
 
-func setupInterfaces(namespaceA, namespaceB, router *namespace.NetNS) (vethA, vethB *netlink.Veth, err error) {
+func setupRouting(cfg *config.Config, namespaces map[string]*namespace.NetNS) error {
+	for _, node := range cfg.Nodes {
+		ns := namespaces[node.Name]
 
-	vethA, err = createVethPair("a")
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to setup veth pair: %w", err)
+		for i, route := range node.Routes {
+			if err := ns.AddRoute(route.Interface, route.Destination, route.Gateway, (i+1)*100); err != nil {
+				return fmt.Errorf("failed to add route for node %s: %w", node.Name, err)
+			}
+		}
 	}
+	/*
+		for i, link := range cfg.Links {
+			srcNs := namespaces[link.SrcNode]
+			dstNs := namespaces[link.DstNode]
 
-	vethB, err = createVethPair("b")
-	if err != nil {
-		return vethA, nil, fmt.Errorf("failed to setup veth pair: %w", err)
-	}
+			srcNode := cfg.Nodes[link.SrcNode]
+			dstNode := cfg.Nodes[link.DstNode]
 
-	err = router.AddConnectivityLink(vethA.PeerName, []int{10, 0, 1, 1})
-	if err != nil {
-		return vethA, vethB, fmt.Errorf("failed to add link to router for vethA: %w", err)
-	}
+			srcIface := srcNode.Interfaces[link.SrcInterface]
+			dstIface := dstNode.Interfaces[link.DstInterface]
 
-	err = router.AddConnectivityLink(vethB.PeerName, []int{10, 0, 2, 1})
-	if err != nil {
-		return vethA, vethB, fmt.Errorf("failed to add link to router for vethB: %w", err)
-	}
+			if srcNode.Type == config.Host {
+				// Make sure to assign the metric otherwise linux will not add two default routes with the same destination and metric.
+				if err := srcNs.AddDefaultRoute(link.SrcInterface, dstIface.IpNet.IP.String(), (i+1)*100); err != nil {
+					return fmt.Errorf("failed to add default route for node %s: %w", link.SrcNode, err)
+				}
+			}
 
-	err = namespaceA.AddConnectivityLink(vethA.Name, []int{10, 0, 1, 2})
-	if err != nil {
-		return vethA, vethB, fmt.Errorf("failed to add link to namespace A: %w", err)
-	}
+			if dstNode.Type == config.Host {
+				if err := dstNs.AddDefaultRoute(link.DstInterface, srcIface.IpNet.IP.String(), (i+1)*100); err != nil {
+					return fmt.Errorf("failed to add default route for node %s: %w", link.DstNode, err)
+				}
+			}
 
-	err = namespaceB.AddConnectivityLink(vethB.Name, []int{10, 0, 2, 2})
-	if err != nil {
-		return vethA, vethB, fmt.Errorf("failed to add link to namespace B: %w", err)
-	}
+			// Maybe for a transit link a concrete route would be a better choice
+			// Since a router does not have default routes.
+			// But for simplicity to establish connectivity, we add default routes between routers.
+			// Otherwise, we will need to have destination subnet of each router
+			if srcNode.Type == config.Router && dstNode.Type == config.Router {
+				if err := srcNs.AddDefaultRoute(link.SrcInterface, dstIface.IpNet.IP.String(), (i+1)*100); err != nil {
+					return fmt.Errorf("failed to add route for node %s: %w", link.SrcNode, err)
+				}
 
-	return vethA, vethB, nil
-}
+				if err := dstNs.AddDefaultRoute(link.DstInterface, srcIface.IpNet.IP.String(), (i+1)*100); err != nil {
+					return fmt.Errorf("failed to add route for node %s: %w", link.DstNode, err)
+				}
+			}
 
-func setupRouting(namespaceA, namespaceB *namespace.NetNS) error {
-	// Add default routes for namespaceA and namespaceB via the router
-	if err := namespaceA.AddDefaultRoute("10.0.1.1"); err != nil {
-		return fmt.Errorf("failed to add route for namespace A: %w", err)
-	}
-
-	if err := namespaceB.AddDefaultRoute("10.0.2.1"); err != nil {
-		return fmt.Errorf("failed to add route for namespace B: %w", err)
-	}
-
+		}*/
 	return nil
 }
-func setupCleanup(namespaceA, namespaceB, router *namespace.NetNS, vethA, vethB *netlink.Veth) {
+
+func setupCleanup(namespaces map[string]*namespace.NetNS, veths []*netlink.Veth) {
 	fmt.Println("Cleaning up lab resources...")
 
-	if vethB != nil {
-		// This is the back up cleanup, in case the veth pair was not removed when the namespaces were deleted.
-		if err := netlink.LinkDel(vethB); err != nil {
-			fmt.Printf("Failed to cleanup veth pair: %s\n", err.Error())
+	for _, veth := range veths {
+		if veth != nil {
+			if err := netlink.LinkDel(veth); err != nil {
+				fmt.Printf("Failed to cleanup veth pair: %s\n", err.Error())
+			}
 		}
 	}
 
-	if vethA != nil {
-		if err := netlink.LinkDel(vethA); err != nil {
-			fmt.Printf("Failed to cleanup veth pair: %s\n", err.Error())
-		}
-	}
-
-	if router != nil {
-		if err := router.Remove(); err != nil {
-			fmt.Printf("Failed to remove namespace router: %s\n", err.Error())
-		}
-	}
-
-	if namespaceB != nil {
-		if err := namespaceB.Remove(); err != nil {
-			fmt.Printf("Failed to remove namespace host-b: %s\n", err.Error())
-		}
-	}
-
-	if namespaceA != nil {
-		if err := namespaceA.Remove(); err != nil {
-			fmt.Printf("Failed to remove namespace host-a: %s\n", err.Error())
+	for name, ns := range namespaces {
+		if ns != nil {
+			if err := ns.Remove(); err != nil {
+				fmt.Printf("Failed to remove namespace %s: %s\n", name, err.Error())
+			}
 		}
 	}
 }
-func Remove() error {
-	// Assuming the lab was set up correctly deleting the namespaces should delete the veth pair as well
-	err := netns.DeleteNamed("host-a")
+func Remove(cfg *config.Config) error {
+	for _, node := range cfg.Nodes {
+		if err := netns.DeleteNamed(node.Name); err != nil {
+			// If namespace doesn't exist, we can ignore the error.
+			if os.IsNotExist(err) {
+				fmt.Printf("Namespace %s does not exist, deletion considered successful\n", node.Name)
+				continue
+			}
 
-	if err != nil {
-		return fmt.Errorf("Error deleting namespace host-a: %w", err)
+			return fmt.Errorf("Error deleting namespace %s: %w", node.Name, err)
+		}
+		fmt.Printf("Namespace %s deleted successfully\n", node.Name)
 	}
-	fmt.Println("Namespace host-a deleted successfully")
-
-	err = netns.DeleteNamed("host-b")
-	if err != nil {
-		return fmt.Errorf("Error deleting namespace host-b: %w", err)
-	}
-	fmt.Println("Namespace host-b deleted successfully")
-
-	err = netns.DeleteNamed("router")
-	if err != nil {
-		return fmt.Errorf("Error deleting namespace router: %w", err)
-	}
-	fmt.Println("Namespace router deleted successfully")
 
 	fmt.Println("Lab removed successfully")
-
 	return nil
 }

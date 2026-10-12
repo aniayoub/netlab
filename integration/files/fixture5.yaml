@@ -1,0 +1,372 @@
+title: "Fixture 5: Four Router Topology with Multiple Access Links"
+
+nodes:
+  - name: host-a
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.1.2/24
+      - name: eth1
+        ip: 10.5.2.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.1.1
+      - interface: eth1
+        destination: 10.5.10.0/24
+        gateway: 10.5.2.1
+
+  - name: host-b
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.3.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.3.1
+
+  - name: host-c
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.4.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.4.1
+
+  - name: host-d
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.5.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.5.1
+
+  - name: host-e
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.6.2/24
+      - name: eth1
+        ip: 10.5.7.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.6.1
+      - interface: eth1
+        destination: 10.5.10.0/24
+        gateway: 10.5.7.1
+
+  - name: host-f
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.8.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.8.1
+
+  - name: host-g
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.9.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.9.1
+
+  - name: host-h
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.10.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.10.1
+
+  - name: host-i
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.11.2/24
+      - name: eth1
+        ip: 10.5.12.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.11.1
+
+  - name: host-j
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.5.13.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.5.13.1
+
+  - name: router-a
+    type: router
+    interfaces:
+      - name: host-a
+        ip: 10.5.1.1/24
+      - name: host-b
+        ip: 10.5.3.1/24
+      - name: host-c
+        ip: 10.5.4.1/24
+      - name: to-router-b
+        ip: 10.5.100.1/30
+    routes:
+      - interface: to-router-b
+        destination: 10.5.2.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.5.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.6.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.7.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.8.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.9.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.10.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.11.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.12.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.13.0/24
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.101.0/30
+        gateway: 10.5.100.2
+      - interface: to-router-b
+        destination: 10.5.102.0/30
+        gateway: 10.5.100.2
+
+  - name: router-b
+    type: router
+    interfaces:
+      - name: host-a
+        ip: 10.5.2.1/24
+      - name: host-d
+        ip: 10.5.5.1/24
+      - name: host-e
+        ip: 10.5.6.1/24
+      - name: to-router-a
+        ip: 10.5.100.2/30
+      - name: to-router-c
+        ip: 10.5.101.1/30
+    routes:
+      - interface: to-router-a
+        destination: 10.5.1.0/24
+        gateway: 10.5.100.1
+      - interface: to-router-a
+        destination: 10.5.3.0/24
+        gateway: 10.5.100.1
+      - interface: to-router-a
+        destination: 10.5.4.0/24
+        gateway: 10.5.100.1
+      - interface: to-router-c
+        destination: 10.5.7.0/24
+        gateway: 10.5.101.2
+      - interface: to-router-c
+        destination: 10.5.8.0/24
+        gateway: 10.5.101.2
+      - interface: to-router-c
+        destination: 10.5.9.0/24
+        gateway: 10.5.101.2
+      - interface: to-router-c
+        destination: 10.5.10.0/24
+        gateway: 10.5.101.2
+      - interface: to-router-c
+        destination: 10.5.11.0/24
+        gateway: 10.5.101.2
+      - interface: to-router-c
+        destination: 10.5.12.0/24
+        gateway: 10.5.101.2
+      - interface: to-router-c
+        destination: 10.5.13.0/24
+        gateway: 10.5.101.2
+      - interface: to-router-c
+        destination: 10.5.102.0/30
+        gateway: 10.5.101.2
+
+  - name: router-c
+    type: router
+    interfaces:
+      - name: host-e
+        ip: 10.5.7.1/24
+      - name: host-f
+        ip: 10.5.8.1/24
+      - name: host-g
+        ip: 10.5.9.1/24
+      - name: to-router-b
+        ip: 10.5.101.2/30
+      - name: to-router-d
+        ip: 10.5.102.1/30
+    routes:
+      - interface: to-router-b
+        destination: 10.5.1.0/24
+        gateway: 10.5.101.1
+      - interface: to-router-b
+        destination: 10.5.2.0/24
+        gateway: 10.5.101.1
+      - interface: to-router-b
+        destination: 10.5.3.0/24
+        gateway: 10.5.101.1
+      - interface: to-router-b
+        destination: 10.5.4.0/24
+        gateway: 10.5.101.1
+      - interface: to-router-b
+        destination: 10.5.5.0/24
+        gateway: 10.5.101.1
+      - interface: to-router-b
+        destination: 10.5.6.0/24
+        gateway: 10.5.101.1
+      - interface: to-router-b
+        destination: 10.5.100.0/30
+        gateway: 10.5.101.1
+      - interface: to-router-d
+        destination: 10.5.10.0/24
+        gateway: 10.5.102.2
+      - interface: to-router-d
+        destination: 10.5.11.0/24
+        gateway: 10.5.102.2
+      - interface: to-router-d
+        destination: 10.5.12.0/24
+        gateway: 10.5.102.2
+      - interface: to-router-d
+        destination: 10.5.13.0/24
+        gateway: 10.5.102.2
+
+  - name: router-d
+    type: router
+    interfaces:
+      - name: host-h
+        ip: 10.5.10.1/24
+      - name: host-i1
+        ip: 10.5.11.1/24
+      - name: host-i2
+        ip: 10.5.12.1/24
+      - name: host-j
+        ip: 10.5.13.1/24
+      - name: to-router-c
+        ip: 10.5.102.2/30
+    routes:
+      - interface: to-router-c
+        destination: 10.5.1.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.2.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.3.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.4.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.5.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.6.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.7.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.8.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.9.0/24
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.100.0/30
+        gateway: 10.5.102.1
+      - interface: to-router-c
+        destination: 10.5.101.0/30
+        gateway: 10.5.102.1
+
+links:
+  - endpoints:
+      - host-a:eth0
+      - router-a:host-a
+
+  - endpoints:
+      - host-a:eth1
+      - router-b:host-a
+
+  - endpoints:
+      - host-b:eth0
+      - router-a:host-b
+
+  - endpoints:
+      - host-c:eth0
+      - router-a:host-c
+
+  - endpoints:
+      - host-d:eth0
+      - router-b:host-d
+
+  - endpoints:
+      - host-e:eth0
+      - router-b:host-e
+
+  - endpoints:
+      - host-e:eth1
+      - router-c:host-e
+
+  - endpoints:
+      - host-f:eth0
+      - router-c:host-f
+
+  - endpoints:
+      - host-g:eth0
+      - router-c:host-g
+
+  - endpoints:
+      - host-h:eth0
+      - router-d:host-h
+
+  - endpoints:
+      - host-i:eth0
+      - router-d:host-i1
+
+  - endpoints:
+      - host-i:eth1
+      - router-d:host-i2
+
+  - endpoints:
+      - host-j:eth0
+      - router-d:host-j
+
+  - endpoints:
+      - router-a:to-router-b
+      - router-b:to-router-a
+
+  - endpoints:
+      - router-b:to-router-c
+      - router-c:to-router-b
+
+  - endpoints:
+      - router-c:to-router-d
+      - router-d:to-router-c

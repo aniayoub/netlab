@@ -1,0 +1,110 @@
+title: "Fixture 3: Dual Router Topology with Transit Link"
+nodes:
+  - name: host-a
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.3.1.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.3.1.1
+
+  - name: host-b
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.3.2.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.3.2.1
+
+  - name: host-c
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.3.3.2/24
+      - name: eth1
+        ip: 10.3.4.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.3.3.1  
+      - interface: eth1
+        destination: 10.3.5.0/24
+        gateway: 10.3.4.1
+
+  - name: host-d
+    type: host
+    interfaces:
+      - name: eth0
+        ip: 10.3.5.2/24
+    routes:
+      - interface: eth0
+        destination: 0.0.0.0/0
+        gateway: 10.3.5.1
+
+  - name: router-a
+    type: router
+    interfaces:
+      - name: host-a
+        ip: 10.3.1.1/24
+      - name: host-b
+        ip: 10.3.2.1/24
+      - name: host-c
+        ip: 10.3.3.1/24
+      - name: transit
+        ip: 10.3.100.1/30
+    routes:
+      - interface: transit
+        destination: 10.3.4.0/24
+        gateway: 10.3.100.2
+      - interface: transit
+        destination: 10.3.5.0/24
+        gateway: 10.3.100.2
+
+  - name: router-b
+    type: router
+    interfaces:
+      - name: host-c
+        ip: 10.3.4.1/24
+      - name: host-d
+        ip: 10.3.5.1/24
+      - name: transit
+        ip: 10.3.100.2/30
+    routes:
+      - interface: transit
+        destination: 10.3.1.0/24
+        gateway: 10.3.100.1
+      - interface: transit
+        destination: 10.3.2.0/24
+        gateway: 10.3.100.1
+      - interface: transit
+        destination: 10.3.3.0/24
+        gateway: 10.3.100.1
+
+links:
+  - endpoints:
+      - host-a:eth0
+      - router-a:host-a
+
+  - endpoints:
+      - host-b:eth0
+      - router-a:host-b
+
+  - endpoints:
+      - host-c:eth0
+      - router-a:host-c
+
+  - endpoints:
+      - host-c:eth1
+      - router-b:host-c
+
+  - endpoints:
+      - host-d:eth0
+      - router-b:host-d
+
+  - endpoints:
+      - router-a:transit
+      - router-b:transit
